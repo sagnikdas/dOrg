@@ -37,7 +37,8 @@ if GOOGLE_OAUTH_ENABLED:
             client_secret=GOOGLE_CLIENT_SECRET,
             server_metadata_url='https://accounts.google.com/.well-known/openid-configuration',
             client_kwargs={
-                'scope': 'openid email profile'
+                'scope': 'openid email profile',
+                'prompt': 'select_account'  # Force account selection to allow different email login
             }
         )
     except Exception as e:

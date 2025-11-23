@@ -59,7 +59,12 @@ async def google_login(request: Request):
             detail="Google OAuth is not configured. Please set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in your .env file."
         )
     redirect_uri = request.url_for('google_callback')
-    return await oauth.google.authorize_redirect(request, redirect_uri)
+    # Force account selection to allow users to choose different email
+    return await oauth.google.authorize_redirect(
+        request, 
+        redirect_uri,
+        prompt='select_account'  # This ensures account selection screen is shown
+    )
 
 
 @app.get("/auth/callback", name="google_callback")

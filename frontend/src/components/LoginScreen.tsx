@@ -35,21 +35,23 @@ export function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
   }, []);
 
   // Check for existing token on mount
+  // Note: We skip auto-login on the login screen to force fresh authentication
+  // This allows users to switch accounts
   useEffect(() => {
-    const existingToken = getToken();
-    if (existingToken) {
-      verifyToken(existingToken).then((result) => {
-        if (result.valid && result.user) {
-          onLoginSuccess(existingToken);
-        } else {
-          // Token is invalid, remove it
-          localStorage.removeItem('auth_token');
-        }
-      }).catch(() => {
+    // Only auto-login if there's a token in the URL (from OAuth callback)
+    // Don't auto-login from localStorage on the login screen
+    const urlParams = new URLSearchParams(window.location.search);
+    const token = urlParams.get('token');
+    
+    if (!token) {
+      // Clear any existing token to force fresh login
+      const existingToken = getToken();
+      if (existingToken) {
+        // Remove token to ensure fresh authentication
         localStorage.removeItem('auth_token');
-      });
+      }
     }
-  }, [onLoginSuccess]);
+  }, []);
 
   const handleTokenCallback = async (token: string) => {
     try {

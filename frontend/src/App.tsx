@@ -95,10 +95,36 @@ function App() {
   };
 
   const handleLogout = () => {
+    // Clear all authentication state
     localStorage.removeItem('auth_token');
     setIsAuthenticated(false);
     setUser(null);
     setCurrentRootPath(null);
+    
+    // Clear tree state by resetting draft
+    resetDraft();
+    
+    // Clear any errors
+    setError(null);
+    
+    // Clear URL parameters if any
+    window.history.replaceState({}, document.title, window.location.pathname);
+  };
+
+  const handleAppRefresh = () => {
+    // Reset to base state - clear selected folder, reset draft, reload tree
+    setCurrentRootPath(null);
+    resetDraft();
+    setError(null);
+    setSelectedNode(null);
+    
+    // Reload tree if we have a root path set
+    if (originalTree) {
+      loadTree();
+    }
+    
+    // Clear URL parameters
+    window.history.replaceState({}, document.title, window.location.pathname);
   };
 
   const handleFolderSelected = async (path: string) => {
@@ -465,12 +491,23 @@ function App() {
         alignItems: 'center',
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-          <h1 style={{ 
-            margin: 0, 
-            fontSize: '24px',
-            fontWeight: '600',
-            color: colors.text,
-          }}>dOrg</h1>
+          <h1 
+            onClick={handleAppRefresh}
+            style={{ 
+              margin: 0, 
+              fontSize: '24px',
+              fontWeight: '600',
+              color: colors.text,
+              cursor: 'pointer',
+              transition: 'opacity 0.2s ease',
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.opacity = '0.7';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.opacity = '1';
+            }}
+          >dOrg</h1>
           {user && (
             <div style={{
               display: 'flex',
