@@ -7,7 +7,7 @@ from typing import Optional
 import logging
 
 from models import TreeNode, MoveItem, MoveResultItem
-from config import ROOT_PATH, get_absolute_path, validate_path
+from config import get_root_path, get_absolute_path, validate_path
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +30,7 @@ def scan_tree(root_path: Optional[str] = None) -> TreeNode:
         PermissionError: If access is denied
     """
     if root_path is None:
-        root_path = ROOT_PATH
+        root_path = get_root_path()
     
     root_path = os.path.abspath(root_path)
     

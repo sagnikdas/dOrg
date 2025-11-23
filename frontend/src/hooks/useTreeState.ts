@@ -2,7 +2,7 @@
 
 import { useState, useCallback } from 'react';
 import { TreeNode } from '../types/tree';
-import { deepCloneTree, removeNodeById, addNodeToParent, findNodeById, updateNodePath } from '../utils/treeUtils';
+import { deepCloneTree, removeNodeById, addNodeToParent, findNodeById, updateNodePath, findParentFolder } from '../utils/treeUtils';
 
 export function useTreeState(initialTree: TreeNode | null) {
   const [originalTree, setOriginalTree] = useState<TreeNode | null>(initialTree);
@@ -98,6 +98,76 @@ export function useTreeState(initialTree: TreeNode | null) {
     setDraftTree(newTree);
   }, [draftTree]);
 
+  const deleteFolder = useCallback((folderId: string) => {
+    if (!draftTree) return;
+    
+    // Don't allow deleting root
+    if (folderId === draftTree.id) return;
+    
+    const newTree = removeNodeById(draftTree, folderId);
+    if (newTree) {
+      setDraftTree(newTree);
+    }
+  }, [draftTree]);
+
+  const renameFolder = useCallback((folderId: string, newName: string) => {
+    if (!draftTree) return;
+    
+    const folder = findNodeById(draftTree, folderId);
+    if (!folder || folder.type !== 'folder') return;
+    
+    // Find parent to check for name conflicts
+    const parent = findParentFolder(draftTree, folderId);
+    if (parent && parent.children) {
+      const existingNames = new Set(
+        parent.children.filter(c => c.id !== folderId).map(c => c.name)
+      );
+      if (existingNames.has(newName)) {
+        // Name conflict - could show error or auto-rename
+        return;
+      }
+    }
+    
+    // Update folder name and paths
+    const updatedFolder = {
+      ...folder,
+      name: newName,
+      relative_path: folder.relative_path === folder.name 
+        ? newName 
+        : folder.relative_path.replace(`/${folder.name}`, `/${newName}`).replace(folder.name, newName),
+      id: folder.relative_path === folder.name 
+        ? newName 
+        : folder.relative_path.replace(`/${folder.name}`, `/${newName}`).replace(folder.name, newName),
+    };
+    
+    // Update all children paths
+    if (updatedFolder.children) {
+      updatedFolder.children = updatedFolder.children.map(child => 
+        updateNodePath(child, updatedFolder.relative_path)
+      );
+    }
+    
+    // Remove old folder and add updated one
+    const treeWithoutFolder = removeNodeById(draftTree, folderId);
+    if (!treeWithoutFolder) return;
+    
+    const parentId = parent ? parent.id : draftTree.id;
+    const newTree = addNodeToParent(treeWithoutFolder, parentId, updatedFolder);
+    setDraftTree(newTree);
+  }, [draftTree]);
+
+  const excludeNode = useCallback((nodeId: string) => {
+    if (!draftTree) return;
+    
+    // Don't allow excluding root
+    if (nodeId === draftTree.id) return;
+    
+    const newTree = removeNodeById(draftTree, nodeId);
+    if (newTree) {
+      setDraftTree(newTree);
+    }
+  }, [draftTree]);
+
   return {
     originalTree,
     draftTree,
@@ -105,6 +175,9 @@ export function useTreeState(initialTree: TreeNode | null) {
     updateOriginalTree,
     moveNode,
     createFolder,
+    deleteFolder,
+    renameFolder,
+    excludeNode,
   };
 }
 

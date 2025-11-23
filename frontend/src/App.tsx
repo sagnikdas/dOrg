@@ -1,19 +1,31 @@
 /** Main application component. */
 
-import React, { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { useTreeState } from './hooks/useTreeState';
 import { fetchTree, applyMoves, undoLastMoves, checkUndoStatus } from './api/filesystem';
 import { computeMoves } from './utils/treeUtils';
 import { TreeView } from './components/TreeView';
 import { Toolbar } from './components/Toolbar';
 import { PreviewModal } from './components/PreviewModal';
+import { LoginScreen } from './components/LoginScreen';
 import { MoveResponse, MoveItem } from './types/moves';
 import { TreeNode } from './types/tree';
 import { useTheme } from './contexts/ThemeContext';
+import { getToken, verifyToken, storeToken, getCurrentUser, User } from './api/auth';
 
 function App() {
   const { colors, theme, toggleTheme } = useTheme();
-  const { originalTree, draftTree, resetDraft, updateOriginalTree, moveNode, createFolder } = useTreeState(null);
+  const { 
+    originalTree, 
+    draftTree, 
+    resetDraft, 
+    updateOriginalTree, 
+    moveNode, 
+    createFolder,
+    deleteFolder,
+    renameFolder,
+    excludeNode
+  } = useTreeState(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [previewResponse, setPreviewResponse] = useState<MoveResponse | null>(null);
@@ -22,12 +34,64 @@ function App() {
   const [canUndo, setCanUndo] = useState(false);
   const [leftPanelWidth, setLeftPanelWidth] = useState(50); // Percentage
   const [isResizing, setIsResizing] = useState(false);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [user, setUser] = useState<User | null>(null);
 
-  // Fetch tree on mount
+  // Check authentication on mount
   useEffect(() => {
-    loadTree();
-    checkUndoAvailability();
+    checkAuthentication();
   }, []);
+
+  // Fetch tree on mount (only if authenticated)
+  useEffect(() => {
+    if (isAuthenticated) {
+      loadTree();
+      checkUndoAvailability();
+    }
+  }, [isAuthenticated]);
+
+  const checkAuthentication = async () => {
+    try {
+      const token = getToken();
+      if (token) {
+        const result = await verifyToken(token);
+        if (result.valid && result.user) {
+          setIsAuthenticated(true);
+          setUser(result.user);
+        } else {
+          // Token is invalid
+          localStorage.removeItem('auth_token');
+          setIsAuthenticated(false);
+        }
+      } else {
+        setIsAuthenticated(false);
+      }
+    } catch (error) {
+      console.error('Auth check error:', error);
+      setIsAuthenticated(false);
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const handleLoginSuccess = async (token: string) => {
+    try {
+      storeToken(token);
+      const userInfo = await getCurrentUser(token);
+      setUser(userInfo);
+      setIsAuthenticated(true);
+    } catch (error) {
+      console.error('Login success error:', error);
+      setError('Failed to get user information');
+    }
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem('auth_token');
+    setIsAuthenticated(false);
+    setUser(null);
+  };
 
   // Handle global mouse events for resizing
   useEffect(() => {
@@ -206,6 +270,28 @@ function App() {
     }
   };
 
+  // Show login screen if not authenticated
+  if (authLoading) {
+    return (
+      <div style={{ 
+        padding: '40px', 
+        textAlign: 'center',
+        backgroundColor: colors.background,
+        color: colors.text,
+        height: '100vh',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+      }}>
+        <p>Checking authentication...</p>
+      </div>
+    );
+  }
+
+  if (!isAuthenticated) {
+    return <LoginScreen onLoginSuccess={handleLoginSuccess} />;
+  }
+
   if (isLoading && !originalTree) {
     return (
       <div style={{ 
@@ -238,15 +324,64 @@ function App() {
         justifyContent: 'space-between',
         alignItems: 'center',
       }}>
-        <h1 style={{ 
-          margin: 0, 
-          fontSize: '24px',
-          fontWeight: '600',
-          color: colors.text,
-        }}>File Reorganization Tool</h1>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+          <h1 style={{ 
+            margin: 0, 
+            fontSize: '24px',
+            fontWeight: '600',
+            color: colors.text,
+          }}>dOrg</h1>
+          {user && (
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              fontSize: '14px',
+              color: colors.textSecondary,
+            }}>
+              {user.picture && (
+                <img 
+                  src={user.picture} 
+                  alt={user.name}
+                  style={{
+                    width: '32px',
+                    height: '32px',
+                    borderRadius: '50%',
+                  }}
+                />
+              )}
+              <span>{user.name || user.email}</span>
+            </div>
+          )}
+        </div>
         
-        {/* Dark Mode Toggle */}
-        <button
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          {/* Logout Button */}
+          <button
+            onClick={handleLogout}
+            style={{
+              padding: '8px 16px',
+              border: `1px solid ${colors.border}`,
+              borderRadius: '8px',
+              backgroundColor: colors.surface,
+              color: colors.text,
+              cursor: 'pointer',
+              fontSize: '14px',
+              fontWeight: '500',
+              transition: 'all 0.2s ease',
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.backgroundColor = colors.hover;
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.backgroundColor = colors.surface;
+            }}
+          >
+            Logout
+          </button>
+          
+          {/* Dark Mode Toggle */}
+          <button
           onClick={toggleTheme}
           style={{
             padding: '8px 16px',
@@ -281,48 +416,49 @@ function App() {
           </span>
           <span>{theme === 'dark' ? 'Light Mode' : 'Dark Mode'}</span>
         </button>
-        {error && (
-          <div
+        </div>
+      </header>
+
+      {error && (
+        <div
+          style={{
+            padding: '12px 24px',
+            backgroundColor: colors.errorBackground,
+            color: colors.error,
+            borderRadius: '0',
+            borderBottom: `1px solid ${colors.error}`,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+          }}
+        >
+          <strong>Error:</strong> {error}
+          <button
+            onClick={() => setError(null)}
             style={{
-              marginTop: '12px',
-              padding: '12px 16px',
-              backgroundColor: colors.errorBackground,
-              color: colors.error,
-              borderRadius: '8px',
+              marginLeft: '12px',
+              padding: '6px 12px',
               border: `1px solid ${colors.error}`,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
+              borderRadius: '6px',
+              backgroundColor: 'transparent',
+              cursor: 'pointer',
+              color: colors.error,
+              fontWeight: '500',
+              transition: 'all 0.2s ease',
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.backgroundColor = colors.error;
+              e.currentTarget.style.color = colors.surface;
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.backgroundColor = 'transparent';
+              e.currentTarget.style.color = colors.error;
             }}
           >
-            <strong>Error:</strong> {error}
-            <button
-              onClick={() => setError(null)}
-              style={{
-                marginLeft: '12px',
-                padding: '6px 12px',
-                border: `1px solid ${colors.error}`,
-                borderRadius: '6px',
-                backgroundColor: 'transparent',
-                cursor: 'pointer',
-                color: colors.error,
-                fontWeight: '500',
-                transition: 'all 0.2s ease',
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.backgroundColor = colors.error;
-                e.currentTarget.style.color = colors.surface;
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.backgroundColor = 'transparent';
-                e.currentTarget.style.color = colors.error;
-              }}
-            >
-              Dismiss
-            </button>
-          </div>
-        )}
-      </header>
+            Dismiss
+          </button>
+        </div>
+      )}
 
       <div 
         data-panel-container
@@ -351,6 +487,7 @@ function App() {
             readOnly={true}
             title="Current Structure"
             onSelectNode={setSelectedNode}
+            onExcludeNode={excludeNode}
           />
         </div>
         
@@ -441,6 +578,9 @@ function App() {
             title="Draft Structure (Drag & Drop to Reorganize)"
             onNodeMove={moveNode}
             onCreateFolder={createFolder}
+            onDeleteFolder={deleteFolder}
+            onRenameFolder={renameFolder}
+            onExcludeNode={excludeNode}
             onSelectNode={setSelectedNode}
           />
         </div>

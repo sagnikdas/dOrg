@@ -47,6 +47,40 @@ class UndoResponse(BaseModel):
     reversed_moves: List[MoveItem]
 
 
+class OrganizeRequest(BaseModel):
+    """Request to organize files by type."""
+    root_path: Optional[str] = None  # Optional override for root path
+
+
+class OrganizeResponse(BaseModel):
+    """Response from organize operation."""
+    moves: List[MoveItem]
+    organized_tree: TreeNode  # The draft tree structure after organization
+
+
+class SetRootPathRequest(BaseModel):
+    """Request to set the root path."""
+    root_path: str
+
+
+class SetRootPathResponse(BaseModel):
+    """Response from set root path operation."""
+    success: bool
+    root_path: str
+    message: str
+
+
+class VerifyTokenRequest(BaseModel):
+    """Request to verify a JWT token."""
+    token: str
+
+
+class VerifyTokenResponse(BaseModel):
+    """Response from token verification."""
+    valid: bool
+    user: Optional[dict] = None
+
+
 # Update forward references for recursive model
 TreeNode.update_forward_refs()
 

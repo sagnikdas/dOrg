@@ -13,6 +13,9 @@ interface TreeViewProps {
   onNodeMove?: (nodeId: string, targetFolderId: string) => void;
   onSelectNode?: (node: TreeNode) => void;
   onCreateFolder?: (parentFolderId: string, folderName: string) => void;
+  onDeleteFolder?: (folderId: string) => void;
+  onRenameFolder?: (folderId: string, newName: string) => void;
+  onExcludeNode?: (nodeId: string) => void;
   readOnly?: boolean;
   title?: string;
 }
@@ -123,14 +126,27 @@ function DroppableFolder({ node, level, isExpanded, onToggle, children, onSelect
   );
 }
 
-export function TreeView({ tree, onNodeMove, onSelectNode, onCreateFolder, readOnly = false, title }: TreeViewProps) {
+export function TreeView({ 
+  tree, 
+  onNodeMove, 
+  onSelectNode, 
+  onCreateFolder, 
+  onDeleteFolder,
+  onRenameFolder,
+  onExcludeNode,
+  readOnly = false, 
+  title 
+}: TreeViewProps) {
   const { colors } = useTheme();
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set(['.']));
   const [draggedNode, setDraggedNode] = useState<TreeNode | null>(null);
-  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; folderId: string } | null>(null);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; node: TreeNode } | null>(null);
   const [showCreateFolderDialog, setShowCreateFolderDialog] = useState(false);
+  const [showRenameDialog, setShowRenameDialog] = useState(false);
   const [createFolderParentId, setCreateFolderParentId] = useState<string>('.');
   const [newFolderName, setNewFolderName] = useState('');
+  const [renameNodeId, setRenameNodeId] = useState<string>('');
+  const [renameNodeName, setRenameNodeName] = useState<string>('');
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -196,10 +212,10 @@ export function TreeView({ tree, onNodeMove, onSelectNode, onCreateFolder, readO
   };
 
   const handleContextMenu = (e: React.MouseEvent, node: TreeNode) => {
-    if (readOnly || !onCreateFolder || node.type !== 'folder') return;
+    if (readOnly) return;
     e.preventDefault();
     e.stopPropagation();
-    setContextMenu({ x: e.clientX, y: e.clientY, folderId: node.id });
+    setContextMenu({ x: e.clientX, y: e.clientY, node });
   };
 
   const handleCreateFolderClick = (parentFolderId: string = '.') => {
@@ -216,6 +232,34 @@ export function TreeView({ tree, onNodeMove, onSelectNode, onCreateFolder, readO
     setNewFolderName('');
     // Expand the parent folder to show the new folder
     setExpandedNodes(prev => new Set(prev).add(createFolderParentId));
+  };
+
+  const handleDeleteFolder = () => {
+    if (!onDeleteFolder || !contextMenu) return;
+    onDeleteFolder(contextMenu.node.id);
+    setContextMenu(null);
+  };
+
+  const handleRenameFolder = () => {
+    if (!contextMenu) return;
+    setRenameNodeId(contextMenu.node.id);
+    setRenameNodeName(contextMenu.node.name);
+    setShowRenameDialog(true);
+    setContextMenu(null);
+  };
+
+  const handleRenameConfirm = () => {
+    if (!onRenameFolder || !renameNodeName.trim()) return;
+    onRenameFolder(renameNodeId, renameNodeName.trim());
+    setShowRenameDialog(false);
+    setRenameNodeId('');
+    setRenameNodeName('');
+  };
+
+  const handleExcludeNode = () => {
+    if (!onExcludeNode || !contextMenu) return;
+    onExcludeNode(contextMenu.node.id);
+    setContextMenu(null);
   };
 
   // Close context menu when clicking outside
@@ -258,6 +302,7 @@ export function TreeView({ tree, onNodeMove, onSelectNode, onCreateFolder, readO
           isExpanded={false}
           onToggle={() => {}}
           onSelect={onSelectNode}
+          onContextMenu={handleContextMenu}
           readOnly={readOnly}
         />
       );
@@ -308,35 +353,6 @@ export function TreeView({ tree, onNodeMove, onSelectNode, onCreateFolder, readO
             }}>
               {title}
             </h3>
-            {!readOnly && onCreateFolder && (
-              <button
-                onClick={() => handleCreateFolderClick('.')}
-                style={{
-                  padding: '8px 16px',
-                  backgroundColor: colors.primary,
-                  color: colors.primaryText,
-                  border: 'none',
-                  borderRadius: '8px',
-                  cursor: 'pointer',
-                  fontSize: '14px',
-                  fontWeight: '500',
-                  transition: 'all 0.2s ease',
-                  boxShadow: `0 2px 4px ${colors.shadow}`,
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.backgroundColor = colors.primaryHover;
-                  e.currentTarget.style.transform = 'translateY(-1px)';
-                  e.currentTarget.style.boxShadow = `0 4px 8px ${colors.shadowHover}`;
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.backgroundColor = colors.primary;
-                  e.currentTarget.style.transform = 'translateY(0)';
-                  e.currentTarget.style.boxShadow = `0 2px 4px ${colors.shadow}`;
-                }}
-              >
-                + Create Folder
-              </button>
-            )}
           </div>
         )}
         <div>
@@ -415,33 +431,110 @@ export function TreeView({ tree, onNodeMove, onSelectNode, onCreateFolder, readO
             borderRadius: '8px',
             boxShadow: `0 4px 12px ${colors.shadowHover}`,
             zIndex: 1000,
-            minWidth: '180px',
+            minWidth: '200px',
             overflow: 'hidden',
           }}
           onClick={(e) => e.stopPropagation()}
         >
-          <button
-            onClick={() => handleCreateFolderClick(contextMenu.folderId)}
-            style={{
-              width: '100%',
-              padding: '10px 16px',
-              textAlign: 'left',
-              border: 'none',
-              backgroundColor: 'transparent',
-              cursor: 'pointer',
-              fontSize: '14px',
-              color: colors.text,
-              transition: 'background-color 0.2s ease',
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.backgroundColor = colors.hover;
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.backgroundColor = 'transparent';
-            }}
-          >
-            📁 Create Folder
-          </button>
+          {contextMenu.node.type === 'folder' && onCreateFolder && (
+            <button
+              onClick={() => handleCreateFolderClick(contextMenu.node.id)}
+              style={{
+                width: '100%',
+                padding: '10px 16px',
+                textAlign: 'left',
+                border: 'none',
+                backgroundColor: 'transparent',
+                cursor: 'pointer',
+                fontSize: '14px',
+                color: colors.text,
+                transition: 'background-color 0.2s ease',
+                borderBottom: `1px solid ${colors.border}`,
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.backgroundColor = colors.hover;
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.backgroundColor = 'transparent';
+              }}
+            >
+              📁 Create Folder
+            </button>
+          )}
+          {contextMenu.node.type === 'folder' && onRenameFolder && (
+            <button
+              onClick={handleRenameFolder}
+              style={{
+                width: '100%',
+                padding: '10px 16px',
+                textAlign: 'left',
+                border: 'none',
+                backgroundColor: 'transparent',
+                cursor: 'pointer',
+                fontSize: '14px',
+                color: colors.text,
+                transition: 'background-color 0.2s ease',
+                borderBottom: contextMenu.node.type === 'folder' && onDeleteFolder ? `1px solid ${colors.border}` : 'none',
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.backgroundColor = colors.hover;
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.backgroundColor = 'transparent';
+              }}
+            >
+              ✏️ Rename Folder
+            </button>
+          )}
+          {contextMenu.node.type === 'folder' && onDeleteFolder && (
+            <button
+              onClick={handleDeleteFolder}
+              style={{
+                width: '100%',
+                padding: '10px 16px',
+                textAlign: 'left',
+                border: 'none',
+                backgroundColor: 'transparent',
+                cursor: 'pointer',
+                fontSize: '14px',
+                color: colors.error,
+                transition: 'background-color 0.2s ease',
+                borderBottom: onExcludeNode ? `1px solid ${colors.border}` : 'none',
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.backgroundColor = colors.errorBackground;
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.backgroundColor = 'transparent';
+              }}
+            >
+              🗑️ Delete Folder
+            </button>
+          )}
+          {onExcludeNode && (
+            <button
+              onClick={handleExcludeNode}
+              style={{
+                width: '100%',
+                padding: '10px 16px',
+                textAlign: 'left',
+                border: 'none',
+                backgroundColor: 'transparent',
+                cursor: 'pointer',
+                fontSize: '14px',
+                color: colors.text,
+                transition: 'background-color 0.2s ease',
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.backgroundColor = colors.hover;
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.backgroundColor = 'transparent';
+              }}
+            >
+              🚫 Exclude {contextMenu.node.type === 'folder' ? 'Folder' : 'File'}
+            </button>
+          )}
         </div>
       )}
 
@@ -563,6 +656,130 @@ export function TreeView({ tree, onNodeMove, onSelectNode, onCreateFolder, readO
                 }}
               >
                 Create
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Rename Folder Dialog */}
+      {showRenameDialog && (
+        <div
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(0,0,0,0.6)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 2000,
+            backdropFilter: 'blur(4px)',
+          }}
+          onClick={() => setShowRenameDialog(false)}
+        >
+          <div
+            style={{
+              backgroundColor: colors.surface,
+              padding: '28px',
+              borderRadius: '12px',
+              minWidth: '320px',
+              boxShadow: `0 8px 24px ${colors.shadowHover}`,
+              border: `1px solid ${colors.border}`,
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 style={{ 
+              marginTop: 0, 
+              marginBottom: '20px',
+              color: colors.text,
+              fontSize: '20px',
+              fontWeight: '600',
+            }}>Rename Folder</h3>
+            <input
+              type="text"
+              value={renameNodeName}
+              onChange={(e) => setRenameNodeName(e.target.value)}
+              placeholder="Folder name"
+              autoFocus
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  handleRenameConfirm();
+                } else if (e.key === 'Escape') {
+                  setShowRenameDialog(false);
+                }
+              }}
+              style={{
+                width: '100%',
+                padding: '12px',
+                fontSize: '14px',
+                border: `1px solid ${colors.border}`,
+                borderRadius: '8px',
+                marginBottom: '20px',
+                boxSizing: 'border-box',
+                backgroundColor: colors.surfaceElevated,
+                color: colors.text,
+                outline: 'none',
+                transition: 'border-color 0.2s ease',
+              }}
+              onFocus={(e) => {
+                e.currentTarget.style.borderColor = colors.primary;
+              }}
+              onBlur={(e) => {
+                e.currentTarget.style.borderColor = colors.border;
+              }}
+            />
+            <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
+              <button
+                onClick={() => setShowRenameDialog(false)}
+                style={{
+                  padding: '10px 20px',
+                  border: `1px solid ${colors.border}`,
+                  borderRadius: '8px',
+                  backgroundColor: colors.surface,
+                  color: colors.text,
+                  cursor: 'pointer',
+                  fontWeight: '500',
+                  transition: 'all 0.2s ease',
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.backgroundColor = colors.hover;
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.backgroundColor = colors.surface;
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleRenameConfirm}
+                disabled={!renameNodeName.trim()}
+                style={{
+                  padding: '10px 20px',
+                  border: 'none',
+                  borderRadius: '8px',
+                  backgroundColor: renameNodeName.trim() ? colors.primary : colors.border,
+                  color: renameNodeName.trim() ? colors.primaryText : colors.textSecondary,
+                  cursor: renameNodeName.trim() ? 'pointer' : 'not-allowed',
+                  fontWeight: '500',
+                  transition: 'all 0.2s ease',
+                }}
+                onMouseEnter={(e) => {
+                  if (renameNodeName.trim()) {
+                    e.currentTarget.style.backgroundColor = colors.primaryHover;
+                    e.currentTarget.style.transform = 'translateY(-1px)';
+                  }
+                }}
+                onMouseLeave={(e) => {
+                  if (renameNodeName.trim()) {
+                    e.currentTarget.style.backgroundColor = colors.primary;
+                    e.currentTarget.style.transform = 'translateY(0)';
+                  }
+                }}
+              >
+                Rename
               </button>
             </div>
           </div>

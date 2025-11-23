@@ -1,12 +1,21 @@
 """FastAPI backend for file reorganization operations."""
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse, JSONResponse
+from starlette.middleware.sessions import SessionMiddleware
 import logging
 
-from models import MoveRequest, MoveResponse, TreeNode, MoveItem, UndoResponse
+from models import (
+    MoveRequest, MoveResponse, TreeNode, MoveItem, UndoResponse,
+    OrganizeRequest, OrganizeResponse, SetRootPathRequest, SetRootPathResponse,
+    VerifyTokenRequest, VerifyTokenResponse
+)
 from filesystem import scan_tree, apply_moves
-from config import ROOT_PATH
+from config import set_root_path, get_root_path
+from organize import organize_by_file_type
+from auth import oauth, create_access_token, get_current_user, ACCESS_TOKEN_EXPIRE_MINUTES, GOOGLE_OAUTH_ENABLED
+from datetime import timedelta
 from typing import List, Optional
 
 # Configure logging
@@ -21,6 +30,9 @@ app = FastAPI(title="File Reorganization API", version="1.0.0")
 # Simple in-memory history for undo (in production, use a database)
 move_history: List[List[MoveItem]] = []
 
+# Add session middleware for OAuth
+app.add_middleware(SessionMiddleware, secret_key="your-secret-key-change-in-production")
+
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
@@ -34,7 +46,86 @@ app.add_middleware(
 @app.get("/health")
 async def health_check():
     """Health check endpoint."""
-    return {"status": "ok", "root_path": ROOT_PATH}
+    return {"status": "ok", "root_path": get_root_path()}
+
+
+# Authentication endpoints
+@app.get("/auth/google")
+async def google_login(request: Request):
+    """Initiate Google OAuth login."""
+    if not GOOGLE_OAUTH_ENABLED:
+        raise HTTPException(
+            status_code=503,
+            detail="Google OAuth is not configured. Please set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in your .env file."
+        )
+    redirect_uri = request.url_for('google_callback')
+    return await oauth.google.authorize_redirect(request, redirect_uri)
+
+
+@app.get("/auth/callback", name="google_callback")
+async def google_callback(request: Request):
+    """Handle Google OAuth callback."""
+    if not GOOGLE_OAUTH_ENABLED:
+        raise HTTPException(
+            status_code=503,
+            detail="Google OAuth is not configured."
+        )
+    try:
+        token = await oauth.google.authorize_access_token(request)
+        user_info = token.get('userinfo')
+        
+        if not user_info:
+            raise HTTPException(status_code=400, detail="Failed to get user info")
+        
+        # Create JWT token
+        access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+        access_token = create_access_token(
+            data={
+                "sub": user_info.get("email", user_info.get("sub")),
+                "email": user_info.get("email"),
+                "name": user_info.get("name"),
+                "picture": user_info.get("picture"),
+            },
+            expires_delta=access_token_expires
+        )
+        
+        # In Electron, redirect to a custom protocol or return token
+        # For web, redirect to frontend with token
+        frontend_url = f"http://localhost:5173/auth/callback?token={access_token}"
+        return RedirectResponse(url=frontend_url)
+    except Exception as e:
+        logger.error(f"OAuth callback error: {e}")
+        raise HTTPException(status_code=400, detail=f"Authentication failed: {str(e)}")
+
+
+@app.get("/auth/me")
+async def get_current_user_info(current_user: dict = Depends(get_current_user)):
+    """Get current authenticated user information."""
+    return {
+        "email": current_user.get("email"),
+        "name": current_user.get("name"),
+        "picture": current_user.get("picture"),
+    }
+
+
+@app.post("/auth/verify", response_model=VerifyTokenResponse)
+async def verify_token(request: VerifyTokenRequest):
+    """Verify a JWT token and return user info."""
+    from auth import SECRET_KEY, ALGORITHM
+    from jose import jwt, JWTError
+    
+    try:
+        payload = jwt.decode(request.token, SECRET_KEY, algorithms=[ALGORITHM])
+        return VerifyTokenResponse(
+            valid=True,
+            user={
+                "email": payload.get("email"),
+                "name": payload.get("name"),
+                "picture": payload.get("picture"),
+            }
+        )
+    except JWTError:
+        return VerifyTokenResponse(valid=False, user=None)
 
 
 @app.get("/tree", response_model=TreeNode)
@@ -49,7 +140,8 @@ async def get_tree():
         HTTPException: If scanning fails
     """
     try:
-        logger.info(f"Scanning tree at {ROOT_PATH}")
+        root_path = get_root_path()
+        logger.info(f"Scanning tree at {root_path}")
         tree = scan_tree()
         return tree
     except FileNotFoundError as e:
@@ -170,6 +262,72 @@ async def get_undo_status():
         "can_undo": len(move_history) > 0,
         "pending_move_sets": len(move_history)
     }
+
+
+@app.post("/set-root-path", response_model=SetRootPathResponse)
+async def set_root_directory(request: SetRootPathRequest):
+    """
+    Set the root directory for file operations.
+    
+    Args:
+        request: SetRootPathRequest containing the root path
+        
+    Returns:
+        SetRootPathResponse with success status
+    """
+    try:
+        if set_root_path(request.root_path):
+            return SetRootPathResponse(
+                success=True,
+                root_path=get_root_path(),
+                message=f"Root path set to {request.root_path}"
+            )
+        else:
+            raise HTTPException(status_code=400, detail="Invalid path")
+    except Exception as e:
+        logger.error(f"Error setting root path: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/organize-by-type", response_model=OrganizeResponse)
+async def organize_files_by_type(request: OrganizeRequest):
+    """
+    Organize files by their extension type.
+    Creates folders named after file extensions and generates moves.
+    
+    Args:
+        request: OrganizeRequest with optional root_path
+        
+    Returns:
+        OrganizeResponse with moves and organized tree structure
+    """
+    try:
+        # Get the root path (use request path or default)
+        root_path = request.root_path if request.root_path else get_root_path()
+        
+        logger.info(f"Organizing files by type in {root_path}")
+        
+        # Generate moves for organizing by file type
+        moves = organize_by_file_type(root_path)
+        
+        # Get the original tree
+        original_tree = scan_tree(root_path)
+        
+        # For now, we'll return the moves and original tree
+        # The frontend will compute the draft tree based on moves
+        return OrganizeResponse(
+            moves=moves,
+            organized_tree=original_tree  # Frontend will compute draft tree
+        )
+    except FileNotFoundError as e:
+        logger.error(f"Root path not found: {e}")
+        raise HTTPException(status_code=404, detail=str(e))
+    except PermissionError as e:
+        logger.error(f"Permission denied: {e}")
+        raise HTTPException(status_code=403, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error organizing files: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 if __name__ == "__main__":

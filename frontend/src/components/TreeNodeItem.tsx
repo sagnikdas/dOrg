@@ -11,10 +11,11 @@ interface TreeNodeItemProps {
   isExpanded: boolean;
   onToggle: () => void;
   onSelect?: (node: TreeNode) => void;
+  onContextMenu?: (e: React.MouseEvent, node: TreeNode) => void;
   readOnly?: boolean;
 }
 
-export function TreeNodeItem({ node, level, isExpanded, onToggle, onSelect, readOnly = false }: TreeNodeItemProps) {
+export function TreeNodeItem({ node, level, isExpanded, onToggle, onSelect, onContextMenu, readOnly = false }: TreeNodeItemProps) {
   const { colors } = useTheme();
   const { attributes, listeners, setNodeRef: setDraggableRef, transform, isDragging } = useDraggable({
     id: node.id,
@@ -70,6 +71,7 @@ export function TreeNodeItem({ node, level, isExpanded, onToggle, onSelect, read
       {...(!readOnly ? listeners : {})}
       {...(!readOnly ? attributes : {})}
       onClick={() => onSelect?.(node)}
+      onContextMenu={(e) => onContextMenu?.(e, node)}
       onMouseEnter={(e) => {
         if (!isDragging && !isOver) {
           e.currentTarget.style.backgroundColor = colors.hover;
