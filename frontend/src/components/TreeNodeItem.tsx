@@ -1,7 +1,7 @@
-/** Individual tree node component with drag support. */
+/** Individual tree node component with drag and drop support. */
 
 import React from 'react';
-import { useDraggable } from '@dnd-kit/core';
+import { useDraggable, useDroppable } from '@dnd-kit/core';
 import { TreeNode } from '../types/tree';
 import { useTheme } from '../contexts/ThemeContext';
 
@@ -11,16 +11,33 @@ interface TreeNodeItemProps {
   isExpanded: boolean;
   onToggle: () => void;
   onSelect?: (node: TreeNode) => void;
+  readOnly?: boolean;
 }
 
-export function TreeNodeItem({ node, level, isExpanded, onToggle, onSelect }: TreeNodeItemProps) {
+export function TreeNodeItem({ node, level, isExpanded, onToggle, onSelect, readOnly = false }: TreeNodeItemProps) {
   const { colors } = useTheme();
-  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
+  const { attributes, listeners, setNodeRef: setDraggableRef, transform, isDragging } = useDraggable({
     id: node.id,
     data: {
       node,
     },
+    disabled: readOnly,
   });
+
+  const { setNodeRef: setDroppableRef, isOver } = useDroppable({
+    id: node.id,
+    data: {
+      node,
+      type: node.type,
+    },
+    disabled: readOnly,
+  });
+
+  // Combine refs
+  const setCombinedRef = (el: HTMLDivElement | null) => {
+    setDroppableRef(el);
+    setDraggableRef(el);
+  };
 
   const style = transform
     ? {
@@ -34,7 +51,7 @@ export function TreeNodeItem({ node, level, isExpanded, onToggle, onSelect }: Tr
 
   return (
     <div
-      ref={setNodeRef}
+      ref={setCombinedRef}
       style={{
         ...style,
         paddingLeft: `${indent}px`,
@@ -44,21 +61,22 @@ export function TreeNodeItem({ node, level, isExpanded, onToggle, onSelect }: Tr
         display: 'flex',
         alignItems: 'center',
         gap: '8px',
-        backgroundColor: isDragging ? colors.hover : 'transparent',
+        backgroundColor: isOver ? colors.active : (isDragging ? colors.hover : 'transparent'),
+        border: isOver ? `2px dashed ${colors.primary}` : '2px solid transparent',
         borderRadius: '4px',
         color: colors.text,
-        transition: 'background-color 0.2s ease',
+        transition: 'background-color 0.2s ease, border-color 0.2s ease',
       }}
-      {...listeners}
-      {...attributes}
+      {...(!readOnly ? listeners : {})}
+      {...(!readOnly ? attributes : {})}
       onClick={() => onSelect?.(node)}
       onMouseEnter={(e) => {
-        if (!isDragging) {
+        if (!isDragging && !isOver) {
           e.currentTarget.style.backgroundColor = colors.hover;
         }
       }}
       onMouseLeave={(e) => {
-        if (!isDragging) {
+        if (!isDragging && !isOver) {
           e.currentTarget.style.backgroundColor = 'transparent';
         }
       }}
@@ -100,4 +118,5 @@ export function TreeNodeItem({ node, level, isExpanded, onToggle, onSelect }: Tr
     </div>
   );
 }
+
 

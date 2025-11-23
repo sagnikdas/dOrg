@@ -6,6 +6,7 @@ import { useDroppable, useDraggable } from '@dnd-kit/core';
 import { TreeNode } from '../types/tree';
 import { TreeNodeItem } from './TreeNodeItem';
 import { useTheme } from '../contexts/ThemeContext';
+import { findParentFolder } from '../utils/treeUtils';
 
 interface TreeViewProps {
   tree: TreeNode | null;
@@ -83,7 +84,12 @@ function DroppableFolder({ node, level, isExpanded, onToggle, children, onSelect
           color: colors.text,
           borderRadius: '4px',
         }}
-        onClick={() => onSelect?.(node)}
+        onClick={(e) => {
+          // Toggle folder when clicking on name
+          e.stopPropagation();
+          onToggle();
+          onSelect?.(node);
+        }}
         onContextMenu={(e) => onContextMenu?.(e, node)}
         onMouseEnter={(e) => {
           if (!isOver) {
@@ -110,7 +116,7 @@ function DroppableFolder({ node, level, isExpanded, onToggle, children, onSelect
         >
           {isExpanded ? '📂' : '📁'}
         </button>
-        <span>{node.name}</span>
+        <span style={{ cursor: 'pointer', userSelect: 'none' }}>{node.name}</span>
       </div>
       {isExpanded && children}
     </div>
@@ -156,7 +162,7 @@ export function TreeView({ tree, onNodeMove, onSelectNode, onCreateFolder, readO
   const handleDragEnd = (event: DragEndEvent) => {
     setDraggedNode(null);
     
-    if (!onNodeMove || readOnly) return;
+    if (!onNodeMove || readOnly || !tree) return;
 
     const { active, over } = event;
     if (!over) return;
@@ -166,13 +172,27 @@ export function TreeView({ tree, onNodeMove, onSelectNode, onCreateFolder, readO
 
     if (!draggedNodeData || !targetNodeData) return;
 
-    // Only allow dropping on folders
-    if (targetNodeData.type !== 'folder') return;
-
     // Don't allow moving a node onto itself
     if (draggedNodeData.id === targetNodeData.id) return;
 
-    onNodeMove(draggedNodeData.id, targetNodeData.id);
+    let targetFolderId: string;
+
+    if (targetNodeData.type === 'folder') {
+      // Dropping on a folder - move to that folder
+      targetFolderId = targetNodeData.id;
+    } else {
+      // Dropping on a file - move to the parent folder of that file
+      // Find the parent folder of the target file
+      const parentFolder = findParentFolder(tree, targetNodeData.id);
+      if (!parentFolder) {
+        // If no parent found (shouldn't happen), use root
+        targetFolderId = tree.id;
+      } else {
+        targetFolderId = parentFolder.id;
+      }
+    }
+
+    onNodeMove(draggedNodeData.id, targetFolderId);
   };
 
   const handleContextMenu = (e: React.MouseEvent, node: TreeNode) => {
@@ -238,6 +258,7 @@ export function TreeView({ tree, onNodeMove, onSelectNode, onCreateFolder, readO
           isExpanded={false}
           onToggle={() => {}}
           onSelect={onSelectNode}
+          readOnly={readOnly}
         />
       );
     }
@@ -330,7 +351,9 @@ export function TreeView({ tree, onNodeMove, onSelectNode, onCreateFolder, readO
               color: colors.text,
               borderRadius: '6px',
               transition: 'background-color 0.2s ease',
+              cursor: 'pointer',
             }}
+            onClick={() => toggleNode(tree.id)}
             onContextMenu={(e) => !readOnly && onCreateFolder && handleContextMenu(e, tree)}
             onMouseEnter={(e) => {
               e.currentTarget.style.backgroundColor = colors.hover;
@@ -340,7 +363,10 @@ export function TreeView({ tree, onNodeMove, onSelectNode, onCreateFolder, readO
             }}
           >
             <button
-              onClick={() => toggleNode(tree.id)}
+              onClick={(e) => {
+                e.stopPropagation();
+                toggleNode(tree.id);
+              }}
               style={{
                 background: 'none',
                 border: 'none',
@@ -356,7 +382,7 @@ export function TreeView({ tree, onNodeMove, onSelectNode, onCreateFolder, readO
             >
               {expandedNodes.has(tree.id) ? '📂' : '📁'}
             </button>
-            <span>{tree.name || 'Root'}</span>
+            <span style={{ cursor: 'pointer', userSelect: 'none' }}>{tree.name || 'Root'}</span>
           </div>
           {expandedNodes.has(tree.id) && tree.children?.map(child => renderTree(child, 1))}
         </div>

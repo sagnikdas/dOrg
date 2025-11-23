@@ -99,6 +99,28 @@ export function buildPathMap(tree: TreeNode, map: Map<string, string> = new Map(
 }
 
 /**
+ * Find the parent folder of a node by its ID.
+ * Returns the parent folder node, or null if not found or if the node is the root.
+ */
+export function findParentFolder(tree: TreeNode, nodeId: string, parent: TreeNode | null = null): TreeNode | null {
+  if (tree.id === nodeId) {
+    // Found the node, return its parent
+    return parent;
+  }
+  
+  if (tree.children) {
+    for (const child of tree.children) {
+      const found = findParentFolder(child, nodeId, tree);
+      if (found !== null) {
+        return found;
+      }
+    }
+  }
+  
+  return null;
+}
+
+/**
  * Compute the moves needed to transform originalTree into draftTree.
  * Matches nodes by finding them in both trees and comparing their paths.
  */
