@@ -3,15 +3,18 @@
 import { useEffect, useState, useMemo } from 'react';
 import { useTreeState } from './hooks/useTreeState';
 import { fetchTree, applyMoves, undoLastMoves, checkUndoStatus } from './api/filesystem';
-import { computeMoves } from './utils/treeUtils';
+import { computeMoves, findNodeByPath, deepCloneTree, removeNodeById, addNodeToParent, updateNodePath } from './utils/treeUtils';
 import { TreeView } from './components/TreeView';
 import { Toolbar } from './components/Toolbar';
 import { PreviewModal } from './components/PreviewModal';
 import { LoginScreen } from './components/LoginScreen';
+import { FolderSelector } from './components/FolderSelector';
+import { ProgressBar } from './components/ProgressBar';
 import { MoveResponse, MoveItem } from './types/moves';
 import { TreeNode } from './types/tree';
 import { useTheme } from './contexts/ThemeContext';
 import { getToken, verifyToken, storeToken, getCurrentUser, User } from './api/auth';
+import { organizeByFileType } from './api/filesystem';
 
 function App() {
   const { colors, theme, toggleTheme } = useTheme();
@@ -24,7 +27,8 @@ function App() {
     createFolder,
     deleteFolder,
     renameFolder,
-    excludeNode
+    excludeNode,
+    setDraftTreeDirectly
   } = useTreeState(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -37,6 +41,9 @@ function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [authLoading, setAuthLoading] = useState(true);
   const [user, setUser] = useState<User | null>(null);
+  const [currentRootPath, setCurrentRootPath] = useState<string | null>(null);
+  const [isOrganizing, setIsOrganizing] = useState(false);
+  const [organizeProgress, setOrganizeProgress] = useState(0);
 
   // Check authentication on mount
   useEffect(() => {
@@ -91,6 +98,157 @@ function App() {
     localStorage.removeItem('auth_token');
     setIsAuthenticated(false);
     setUser(null);
+    setCurrentRootPath(null);
+  };
+
+  const handleFolderSelected = async (path: string) => {
+    setCurrentRootPath(path);
+    // Reload tree after folder is selected
+    await loadTree();
+  };
+
+  const handleOrganizeByType = async () => {
+    if (!currentRootPath) {
+      setError('Please select a folder first');
+      return;
+    }
+
+    if (!originalTree || !draftTree) {
+      setError('Tree not loaded. Please wait...');
+      return;
+    }
+
+    try {
+      setIsOrganizing(true);
+      setOrganizeProgress(0);
+      setError(null);
+      
+      // Fetch organization moves from backend
+      const result = await organizeByFileType(currentRootPath);
+      const totalMoves = result.moves.length;
+      
+      if (totalMoves === 0) {
+        setError('No files to organize');
+        setIsOrganizing(false);
+        return;
+      }
+      
+      // Start building the organized tree in memory
+      // Clone the original tree as the base
+      let organizedTree = deepCloneTree(originalTree);
+      
+      // Create a map to track created folders
+      const folderMap = new Map<string, TreeNode>();
+      folderMap.set('.', organizedTree);
+      
+      // Helper to get or create a folder
+      const getOrCreateFolder = (path: string): TreeNode => {
+        if (path === '.') return organizedTree;
+        
+        if (folderMap.has(path)) {
+          return folderMap.get(path)!;
+        }
+        
+        // Create folder path recursively
+        const parts = path.split('/').filter(p => p !== '.' && p !== '');
+        let currentPath = '.';
+        let currentFolder = organizedTree;
+        
+        for (const part of parts) {
+          const nextPath = currentPath === '.' ? part : `${currentPath}/${part}`;
+          
+          if (!folderMap.has(nextPath)) {
+            // Check if folder already exists in tree
+            let folder = findNodeByPath(currentFolder, nextPath);
+            
+            if (!folder) {
+              // Create new folder
+              folder = {
+                id: nextPath,
+                name: part,
+                type: 'folder',
+                relative_path: nextPath,
+                children: [],
+              };
+              
+              // Add to current folder
+              if (!currentFolder.children) {
+                currentFolder.children = [];
+              }
+              currentFolder.children.push(folder);
+            }
+            
+            folderMap.set(nextPath, folder);
+          }
+          
+          currentPath = nextPath;
+          currentFolder = folderMap.get(nextPath)!;
+        }
+        
+        return currentFolder;
+      };
+      
+      // Apply all moves to build the organized tree
+      for (let i = 0; i < result.moves.length; i++) {
+        const move = result.moves[i];
+        
+        // Update progress
+        setOrganizeProgress(Math.round(((i + 1) / totalMoves) * 100));
+        
+        // Find the node to move
+        const nodeToMove = findNodeByPath(organizedTree, move.from_path);
+        if (!nodeToMove) {
+          console.warn(`Node not found: ${move.from_path}`);
+          continue;
+        }
+        
+        // Get target folder path
+        const targetFolderPath = move.to_path.includes('/') 
+          ? move.to_path.substring(0, move.to_path.lastIndexOf('/'))
+          : '.';
+        
+        // Get or create target folder
+        const targetFolder = getOrCreateFolder(targetFolderPath);
+        
+        if (targetFolder.type !== 'folder') {
+          console.warn(`Target is not a folder: ${targetFolderPath}`);
+          continue;
+        }
+        
+        // Remove node from current location
+        const treeAfterRemove = removeNodeById(organizedTree, nodeToMove.id);
+        if (!treeAfterRemove) {
+          console.error('Failed to remove node from tree');
+          break;
+        }
+        
+        // Update node path
+        const updatedNode = updateNodePath(nodeToMove, targetFolder.relative_path);
+        
+        // Add node to target folder
+        organizedTree = addNodeToParent(treeAfterRemove, targetFolder.id, updatedNode);
+        
+        // Update folder map if we added to a new folder
+        if (!folderMap.has(targetFolder.id)) {
+          folderMap.set(targetFolder.id, targetFolder);
+        }
+      }
+      
+      // Set the organized tree all at once (single state update)
+      setDraftTreeDirectly(organizedTree);
+      setOrganizeProgress(100);
+      
+      // Small delay to show 100% before hiding progress
+      await new Promise(resolve => setTimeout(resolve, 300));
+      
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Failed to organize files by type';
+      setError(errorMessage);
+      console.error('Error organizing by type:', err);
+    } finally {
+      setIsOrganizing(false);
+      setOrganizeProgress(0);
+    }
   };
 
   // Handle global mouse events for resizing
@@ -161,37 +319,6 @@ function App() {
     }
   }, [originalTree, draftTree, moves, hasChanges]);
 
-  const handlePreview = async () => {
-    if (!originalTree || !draftTree) {
-      console.warn('Cannot preview: missing tree data');
-      return;
-    }
-
-    try {
-      setIsLoading(true);
-      setError(null);
-      const computedMoves: MoveItem[] = computeMoves(originalTree, draftTree);
-      console.log('Preview: computed moves:', computedMoves);
-      
-      if (computedMoves.length === 0) {
-        setError('No changes detected. Try moving files/folders in the draft tree.');
-        setIsLoading(false);
-        return;
-      }
-      
-      const response = await applyMoves({ moves: computedMoves, dry_run: true });
-      console.log('Preview response:', response);
-      setPreviewResponse(response);
-      setShowPreviewModal(true);
-    } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : 'Failed to preview changes';
-      setError(errorMessage);
-      console.error('Error previewing changes:', err);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
   const handleApply = async () => {
     if (!originalTree || !draftTree) {
       console.warn('Cannot apply: missing tree data');
@@ -250,18 +377,31 @@ function App() {
   const handleUndo = async () => {
     try {
       setIsLoading(true);
-      setError(null);
+      setError(null); // Clear any previous errors
+      
       const result = await undoLastMoves();
       console.log('Undo result:', result);
       
-      // Reload tree to reflect undone moves
-      await loadTree();
-      await checkUndoAvailability();
-      
-      setError(null);
-      // Show success message
-      alert(result.message);
+      // If we got here, the API call succeeded
+      // Check if undo was successful according to the response
+      if (result && result.success !== false) {
+        // Reload tree to reflect undone moves
+        try {
+          await loadTree();
+          await checkUndoAvailability();
+        } catch (reloadErr) {
+          // If reload fails, log but don't show error since undo succeeded
+          console.warn('Failed to reload tree after undo:', reloadErr);
+        }
+        
+        // Clear any errors - undo was successful
+        setError(null);
+      } else {
+        // Undo operation reported failure
+        setError(result?.message || 'Failed to undo moves');
+      }
     } catch (err) {
+      // API call failed (network error, 500, etc.)
       const errorMessage = err instanceof Error ? err.message : 'Failed to undo moves';
       setError(errorMessage);
       console.error('Error undoing moves:', err);
@@ -419,6 +559,11 @@ function App() {
         </div>
       </header>
 
+      <FolderSelector
+        onFolderSelected={handleFolderSelected}
+        currentPath={currentRootPath || undefined}
+      />
+
       {error && (
         <div
           style={{
@@ -458,6 +603,59 @@ function App() {
             Dismiss
           </button>
         </div>
+      )}
+
+      {currentRootPath && (
+        <div style={{
+          padding: '12px 24px',
+          borderBottom: `1px solid ${colors.border}`,
+          backgroundColor: colors.surface,
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+        }}>
+          <div style={{ fontSize: '14px', color: colors.textSecondary }}>
+            Organizing: <strong style={{ color: colors.text }}>{currentRootPath}</strong>
+          </div>
+          <button
+            onClick={handleOrganizeByType}
+            disabled={isOrganizing || isLoading}
+            style={{
+              padding: '10px 20px',
+              fontSize: '14px',
+              fontWeight: '600',
+              border: 'none',
+              borderRadius: '8px',
+              cursor: isOrganizing || isLoading ? 'not-allowed' : 'pointer',
+              backgroundColor: isOrganizing || isLoading ? colors.border : colors.primary,
+              color: isOrganizing || isLoading ? colors.textSecondary : colors.primaryText,
+              transition: 'all 0.2s ease',
+              boxShadow: `0 2px 4px ${colors.shadow}`,
+            }}
+            onMouseEnter={(e) => {
+              if (!isOrganizing && !isLoading) {
+                e.currentTarget.style.backgroundColor = colors.primaryHover;
+                e.currentTarget.style.transform = 'translateY(-1px)';
+              }
+            }}
+            onMouseLeave={(e) => {
+              if (!isOrganizing && !isLoading) {
+                e.currentTarget.style.backgroundColor = colors.primary;
+                e.currentTarget.style.transform = 'translateY(0)';
+              }
+            }}
+          >
+            {isOrganizing ? 'Organizing...' : 'Organize by File Type'}
+          </button>
+        </div>
+      )}
+
+      {isOrganizing && (
+        <ProgressBar
+          progress={organizeProgress}
+          label="Organizing files by type..."
+          showPercentage={true}
+        />
       )}
 
       <div 

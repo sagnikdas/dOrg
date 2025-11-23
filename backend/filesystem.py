@@ -213,3 +213,93 @@ def apply_moves(moves: list[MoveItem], dry_run: bool = True) -> list[MoveResultI
     
     return results
 
+
+def remove_empty_folders(root_path: Optional[str] = None, folder_paths: Optional[list[str]] = None) -> list[str]:
+    """
+    Remove empty folders. If folder_paths is provided, only remove those specific folders.
+    Otherwise, recursively find and remove all empty folders in the root path.
+    
+    Args:
+        root_path: Optional root path (defaults to ROOT_PATH)
+        folder_paths: Optional list of specific folder paths to check and remove if empty
+        
+    Returns:
+        List of removed folder paths (relative to root)
+    """
+    if root_path is None:
+        root_path = get_root_path()
+    
+    root_path = os.path.abspath(root_path)
+    removed_folders = []
+    
+    def is_empty_folder(folder_abs_path: str) -> bool:
+        """Check if a folder is empty."""
+        try:
+            if not os.path.isdir(folder_abs_path):
+                return False
+            # Check if directory is empty
+            with os.scandir(folder_abs_path) as entries:
+                return not any(entries)
+        except (OSError, PermissionError) as e:
+            logger.warning(f"Error checking if folder is empty {folder_abs_path}: {e}")
+            return False
+    
+    def remove_folder_if_empty(relative_path: str) -> bool:
+        """Remove folder if empty. Returns True if removed."""
+        if relative_path == '.':
+            return False  # Don't remove root
+        
+        folder_abs = get_absolute_path(relative_path)
+        
+        if not os.path.exists(folder_abs) or not os.path.isdir(folder_abs):
+            return False
+        
+        if is_empty_folder(folder_abs):
+            try:
+                os.rmdir(folder_abs)
+                removed_folders.append(relative_path)
+                logger.info(f"Removed empty folder: {relative_path}")
+                return True
+            except (OSError, PermissionError) as e:
+                logger.warning(f"Error removing empty folder {relative_path}: {e}")
+                return False
+        return False
+    
+    if folder_paths:
+        # Remove specific folders if empty
+        # Sort by depth (deepest first) to handle nested folders
+        def get_depth(path: str) -> int:
+            return len([p for p in path.split("/") if p and p != '.'])
+        
+        sorted_paths = sorted(folder_paths, key=get_depth, reverse=True)
+        
+        for folder_path in sorted_paths:
+            remove_folder_if_empty(folder_path)
+    else:
+        # Recursively find and remove all empty folders
+        def find_and_remove_empty(current_abs: str, current_relative: str):
+            """Recursively find and remove empty folders."""
+            try:
+                if not os.path.isdir(current_abs):
+                    return
+                
+                # First, process children (deepest first)
+                try:
+                    entries = list(os.scandir(current_abs))
+                    for entry in entries:
+                        if entry.is_dir() and not entry.is_symlink():
+                            child_relative = os.path.join(current_relative, entry.name).replace("\\", "/")
+                            find_and_remove_empty(entry.path, child_relative)
+                except PermissionError:
+                    return
+                
+                # Then check if current folder is empty (after children are processed)
+                if current_relative != '.':
+                    remove_folder_if_empty(current_relative)
+            except (OSError, PermissionError) as e:
+                logger.warning(f"Error processing folder {current_relative}: {e}")
+        
+        find_and_remove_empty(root_path, '.')
+    
+    return removed_folders
+

@@ -11,7 +11,7 @@ from models import (
     OrganizeRequest, OrganizeResponse, SetRootPathRequest, SetRootPathResponse,
     VerifyTokenRequest, VerifyTokenResponse
 )
-from filesystem import scan_tree, apply_moves
+from filesystem import scan_tree, apply_moves, remove_empty_folders
 from config import set_root_path, get_root_path
 from organize import organize_by_file_type
 from auth import oauth, create_access_token, get_current_user, ACCESS_TOKEN_EXPIRE_MINUTES, GOOGLE_OAUTH_ENABLED
@@ -222,30 +222,76 @@ async def undo_last_moves():
         ]
         
         logger.info(f"Undoing {len(reversed_moves)} moves")
+        logger.debug(f"Reversed moves: {[(m.from_path, m.to_path) for m in reversed_moves[:5]]}")
         
         # Apply the reversed moves
         results = apply_moves(reversed_moves, dry_run=False)
+        logger.debug(f"Undo results: {[(r.status, r.reason) for r in results[:5]]}")
         
-        # Check if all reversals were successful
-        all_successful = all(
-            r.status in ("moved", "moved_fallback")
-            for r in results
-        )
+        # Count successful and failed moves
+        successful = [r for r in results if r.status in ("moved", "moved_fallback")]
+        skipped = [r for r in results if r.status == "skip"]
+        failed = [r for r in results if r.status == "error"]
         
-        if not all_successful:
+        # Log details for debugging
+        if failed:
+            for f in failed:
+                logger.warning(f"Failed to undo move {f.from_path} -> {f.to_path}: {f.reason}")
+        if skipped:
+            for s in skipped:
+                logger.info(f"Skipped undo move {s.from_path} -> {s.to_path}: {s.reason}")
+        
+        # If there are actual errors (not just skips), that's a problem
+        if failed:
             # If undo failed, put the moves back in history
             move_history.append(last_moves)
-            failed_count = sum(1 for r in results if r.status not in ("moved", "moved_fallback"))
+            error_details = "; ".join([f"{f.from_path} -> {f.to_path}: {f.reason}" for f in failed[:3]])
+            if len(failed) > 3:
+                error_details += f" (and {len(failed) - 3} more)"
             raise HTTPException(
                 status_code=500,
-                detail=f"Failed to undo {failed_count} move(s). Some files may have been moved."
+                detail=f"Failed to undo {len(failed)} move(s). {error_details}"
             )
         
-        logger.info(f"Successfully undone {len(reversed_moves)} moves")
+        # If some were skipped (destination exists), that's okay - they're already in the right place
+        # Log a warning but don't fail
+        if skipped:
+            logger.warning(f"{len(skipped)} move(s) were skipped during undo (destination already exists)")
+        
+        # Clean up empty folders that were created during organization
+        # Extract folder paths from the original moves (these are the folders that were created)
+        folder_paths_to_check = set()
+        for move in last_moves:
+            # Extract the folder path from the to_path (where files were moved to)
+            # e.g., "mp3/file.txt" -> "mp3"
+            if '/' in move.to_path:
+                folder_path = move.to_path.rsplit('/', 1)[0]
+                if folder_path:  # Don't add empty string
+                    folder_paths_to_check.add(folder_path)
+        
+        # Remove empty folders (deepest first)
+        removed_folders = []
+        if folder_paths_to_check:
+            try:
+                removed_folders = remove_empty_folders(folder_paths=list(folder_paths_to_check))
+                if removed_folders:
+                    logger.info(f"Removed {len(removed_folders)} empty folder(s) after undo")
+            except Exception as e:
+                # Don't fail undo if folder cleanup fails
+                logger.warning(f"Error cleaning up empty folders: {e}")
+        
+        # Build success message
+        success_msg = f"Successfully undone {len(successful)} move(s)"
+        if skipped:
+            success_msg += f" ({len(skipped)} were already in place)"
+        if removed_folders:
+            success_msg += f" and removed {len(removed_folders)} empty folder(s)"
+        
+        logger.info(success_msg)
         
         return UndoResponse(
             success=True,
-            message=f"Successfully undone {len(reversed_moves)} move(s)",
+            message=success_msg,
             reversed_moves=reversed_moves
         )
     except HTTPException:

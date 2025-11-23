@@ -29,6 +29,22 @@ export function findNodeById(tree: TreeNode, id: string): TreeNode | null {
 }
 
 /**
+ * Find a node by relative path in the tree.
+ */
+export function findNodeByPath(tree: TreeNode, path: string): TreeNode | null {
+  if (tree.relative_path === path) {
+    return tree;
+  }
+  if (tree.children) {
+    for (const child of tree.children) {
+      const found = findNodeByPath(child, path);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+/**
  * Remove a node from the tree by ID.
  */
 export function removeNodeById(tree: TreeNode, id: string): TreeNode | null {

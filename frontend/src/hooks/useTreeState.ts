@@ -168,6 +168,10 @@ export function useTreeState(initialTree: TreeNode | null) {
     }
   }, [draftTree]);
 
+  const setDraftTreeDirectly = useCallback((tree: TreeNode) => {
+    setDraftTree(tree);
+  }, []);
+
   return {
     originalTree,
     draftTree,
@@ -178,6 +182,7 @@ export function useTreeState(initialTree: TreeNode | null) {
     deleteFolder,
     renameFolder,
     excludeNode,
+    setDraftTreeDirectly,
   };
 }
 
